@@ -48,7 +48,16 @@
 
     <!-- Header / Nav -->
     <nav class="sticky top-0 z-10 bg-white/80 backdrop-blur-md border-b border-gray-100 px-6 py-4 flex justify-between items-center">
-        <h1 class="text-lg font-light tracking-tight text-gray-500">NoteVault</h1>
+        <div>
+            <h1 class="text-lg font-light tracking-tight text-gray-500">NoteVault</h1>
+            <div id="appState" class="mt-1 text-xs text-gray-500">
+                Notes: <span id="stateNotesCount">0</span>
+                <span class="mx-1">•</span>
+                Memory: <span id="stateMemoryUsed">0 B</span>
+                <span class="mx-1">•</span>
+                Usage: <span id="stateMemoryPercent">0.00%</span>
+            </div>
+        </div>
         <button id="newNoteBtn" class="bg-black text-white px-4 py-2 rounded-full text-sm font-medium hover:bg-gray-800 transition-colors">
             + New Note
         </button>
@@ -163,9 +172,50 @@
         const copyBtn = document.getElementById('copyBtn');
         const deleteBtn = document.getElementById('deleteBtn');
         const toast = document.getElementById('toast');
+        const stateNotesCount = document.getElementById('stateNotesCount');
+        const stateMemoryUsed = document.getElementById('stateMemoryUsed');
+        const stateMemoryPercent = document.getElementById('stateMemoryPercent');
 
         let currentNoteId = null;
         let autoSaveTimeout = null;
+
+        const formatBytes = (bytes) => {
+            if (!bytes) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let value = bytes;
+            let unitIndex = 0;
+
+            while (value >= 1024 && unitIndex < units.length - 1) {
+                value /= 1024;
+                unitIndex += 1;
+            }
+
+            const decimals = value >= 10 || unitIndex === 0 ? 0 : 1;
+            return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+        };
+
+        const estimateNotesMemory = (notes) => {
+            const serialized = JSON.stringify(notes);
+            return new Blob([serialized]).size;
+        };
+
+        const updateAppState = async (notes = null) => {
+            const notesForState = notes || await getAllNotes();
+            const nonEmptyNotes = notesForState.filter(note => note.content && note.content.trim());
+            const memoryUsedBytes = estimateNotesMemory(nonEmptyNotes);
+
+            stateNotesCount.textContent = String(nonEmptyNotes.length);
+            stateMemoryUsed.textContent = formatBytes(memoryUsedBytes);
+
+            if (navigator.storage && navigator.storage.estimate) {
+                const { quota } = await navigator.storage.estimate();
+                const percentUsed = quota ? ((memoryUsedBytes / quota) * 100) : 0;
+                stateMemoryPercent.textContent = `${percentUsed.toFixed(4)}%`;
+                return;
+            }
+
+            stateMemoryPercent.textContent = 'Unavailable';
+        };
 
         const showToast = (message) => {
             toast.textContent = message;
@@ -181,6 +231,7 @@
             
             if (notes.length === 0) {
                 emptyState.classList.remove('hidden');
+                await updateAppState(notes);
                 return;
             }
             emptyState.classList.add('hidden');
@@ -204,6 +255,8 @@
                 card.appendChild(date);
                 notesGrid.appendChild(card);
             });
+
+            await updateAppState(notes);
         };
 
         const openNote = async (id = null) => {
@@ -253,6 +306,7 @@
                 };
                 await saveNote(note);
                 saveStatus.textContent = 'Saved';
+                await renderNotes();
             }, 500);
         };
 
