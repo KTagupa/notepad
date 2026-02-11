@@ -101,6 +101,21 @@
         </div>
     </div>
 
+
+    <!-- Global Search Modal -->
+    <div id="searchModal" class="fixed inset-0 z-[70] flex items-start justify-center pt-20 px-4 hidden">
+        <div id="searchBackdrop" class="modal-overlay absolute inset-0"></div>
+        <div class="relative w-full max-w-2xl bg-white border border-gray-100 rounded-2xl shadow-2xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-gray-100">
+                <input id="searchInput" type="text" placeholder="Search notes..." class="w-full text-sm text-gray-700 placeholder:text-gray-400 outline-none" />
+            </div>
+            <div id="searchResults" class="max-h-80 overflow-y-auto custom-scrollbar"></div>
+            <div class="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
+                Option+Space to open • Enter to open • Esc to close
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-black text-white px-6 py-3 rounded-full text-sm shadow-xl transition-all duration-300 opacity-0 pointer-events-none translate-y-10 z-[60]">
         Copied to clipboard
@@ -172,12 +187,17 @@
         const copyBtn = document.getElementById('copyBtn');
         const deleteBtn = document.getElementById('deleteBtn');
         const toast = document.getElementById('toast');
+        const searchModal = document.getElementById('searchModal');
+        const searchBackdrop = document.getElementById('searchBackdrop');
+        const searchInput = document.getElementById('searchInput');
+        const searchResults = document.getElementById('searchResults');
         const stateNotesCount = document.getElementById('stateNotesCount');
         const stateMemoryUsed = document.getElementById('stateMemoryUsed');
         const stateMemoryPercent = document.getElementById('stateMemoryPercent');
 
         let currentNoteId = null;
         let autoSaveTimeout = null;
+        let searchMatches = [];
 
         const formatBytes = (bytes) => {
             if (!bytes) return '0 B';
@@ -259,16 +279,23 @@
             await updateAppState(notes);
         };
 
-        const openNote = async (id = null) => {
+        const openNote = async (id = null, searchQuery = '') => {
             currentNoteId = id || Date.now();
-            
+
             if (id) {
                 const transaction = db.transaction(STORE_NAME, 'readonly');
                 const store = transaction.objectStore(STORE_NAME);
                 const request = store.get(id);
-                request.onsuccess = () => {
-                    noteEditor.value = request.result ? request.result.content : '';
-                };
+                await new Promise((resolve) => {
+                    request.onsuccess = () => {
+                        noteEditor.value = request.result ? request.result.content : '';
+                        resolve();
+                    };
+                    request.onerror = () => {
+                        noteEditor.value = '';
+                        resolve();
+                    };
+                });
             } else {
                 noteEditor.value = '';
                 // Pre-create entry to avoid racing
@@ -282,6 +309,91 @@
             noteModal.classList.remove('hidden');
             noteEditor.focus();
             saveStatus.textContent = 'Ready';
+
+            if (searchQuery) {
+                const lowerContent = noteEditor.value.toLowerCase();
+                const startIndex = lowerContent.indexOf(searchQuery.toLowerCase());
+                if (startIndex >= 0) {
+                    noteEditor.setSelectionRange(startIndex, startIndex);
+                }
+            }
+        };
+
+        const createHighlightedPreview = (content, query) => {
+            const fragment = document.createDocumentFragment();
+            const lowerContent = content.toLowerCase();
+            const lowerQuery = query.toLowerCase();
+            const matchIndex = lowerContent.indexOf(lowerQuery);
+
+            if (matchIndex < 0) {
+                fragment.appendChild(document.createTextNode(content));
+                return fragment;
+            }
+
+            const before = content.slice(0, matchIndex);
+            const match = content.slice(matchIndex, matchIndex + query.length);
+            const after = content.slice(matchIndex + query.length);
+
+            fragment.appendChild(document.createTextNode(before));
+            const mark = document.createElement('mark');
+            mark.className = 'bg-yellow-100 rounded px-0.5';
+            mark.textContent = match;
+            fragment.appendChild(mark);
+            fragment.appendChild(document.createTextNode(after));
+            return fragment;
+        };
+
+        const renderSearchResults = () => {
+            const query = searchInput.value.trim();
+            searchResults.innerHTML = '';
+
+            if (!query) {
+                searchResults.innerHTML = '<p class="px-4 py-3 text-sm text-gray-400">Type to search all notes</p>';
+                searchMatches = [];
+                return;
+            }
+
+            getAllNotes().then((notes) => {
+                searchMatches = notes.filter(note => note.content && note.content.toLowerCase().includes(query.toLowerCase()));
+
+                if (!searchMatches.length) {
+                    searchResults.innerHTML = '<p class="px-4 py-3 text-sm text-gray-400">No results</p>';
+                    return;
+                }
+
+                searchMatches.forEach((note) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'w-full text-left px-4 py-3 border-b border-gray-50 last:border-b-0 hover:bg-gray-50 transition-colors';
+
+                    const preview = document.createElement('p');
+                    preview.className = 'text-sm text-gray-700 line-clamp-2 whitespace-pre-wrap';
+                    preview.appendChild(createHighlightedPreview(note.content, query));
+
+                    const date = document.createElement('p');
+                    date.className = 'mt-1 text-[10px] text-gray-400 uppercase tracking-widest';
+                    date.textContent = new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+                    button.appendChild(preview);
+                    button.appendChild(date);
+                    button.onclick = async () => {
+                        closeSearch();
+                        await openNote(note.id, query);
+                    };
+                    searchResults.appendChild(button);
+                });
+            });
+        };
+
+        const openSearch = () => {
+            searchModal.classList.remove('hidden');
+            searchInput.value = '';
+            renderSearchResults();
+            searchInput.focus();
+        };
+
+        const closeSearch = () => {
+            searchModal.classList.add('hidden');
         };
 
         const closeNote = () => {
@@ -342,11 +454,40 @@
         noteEditor.oninput = handleInput;
         copyBtn.onclick = handleCopy;
         deleteBtn.onclick = handleDelete;
+        searchInput.oninput = renderSearchResults;
+        searchBackdrop.onclick = closeSearch;
 
-        // Close modal on escape
-        window.onkeydown = (e) => {
-            if (e.key === 'Escape' && !noteModal.classList.contains('hidden')) {
-                closeNote();
+        // Global keyboard shortcuts
+        window.onkeydown = async (e) => {
+            if (e.altKey && e.code === 'Space') {
+                e.preventDefault();
+                if (searchModal.classList.contains('hidden')) {
+                    openSearch();
+                } else {
+                    closeSearch();
+                }
+                return;
+            }
+
+            if (e.key === 'Escape') {
+                if (!searchModal.classList.contains('hidden')) {
+                    closeSearch();
+                    return;
+                }
+                if (!noteModal.classList.contains('hidden')) {
+                    closeNote();
+                }
+                return;
+            }
+
+            if (e.key === 'Enter' && document.activeElement === searchInput && !searchModal.classList.contains('hidden')) {
+                e.preventDefault();
+                const firstMatch = searchMatches[0];
+                if (firstMatch) {
+                    const query = searchInput.value.trim();
+                    closeSearch();
+                    await openNote(firstMatch.id, query);
+                }
             }
         };
     </script>
